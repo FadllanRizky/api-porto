@@ -17,6 +17,7 @@ const app = express();
 
 // ================== CORS ==================
 const allowedOrigins = [
+  'https://project-ecommerce-rose.vercel.app/',
   'http://localhost:5173', 
   'http://localhost:5174', 
   process.env.FRONTEND_URL // 👈 Akan otomatis mengizinkan URL frontend vercel kamu nanti
