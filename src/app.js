@@ -79,10 +79,14 @@ app.use((req, res) => {
 });
 
 // ================== RUN SERVER ==================
-const PORT = process.env.PORT || 3000;
+// Hanya jalankan app.listen jika di komputer lokal (development)
+if (process.env.NODE_ENV !== 'production') {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+  });
+}
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-});
+export default app;
 
 export default app;

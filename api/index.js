@@ -1,7 +1,5 @@
-import 'dotenv/config'; // ⬅️ HARUS PALING ATAS
-
+import 'dotenv/config'; // Tetap paling atas
 import app from '../src/app.js';
 
-export default function handler(req, res) {
-  return app(req, res);
-}
+// Langsung export aplikasi Express-nya, Vercel yang akan handle sisanya
+export default app;
