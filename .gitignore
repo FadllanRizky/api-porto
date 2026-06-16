@@ -1,0 +1,40 @@
+# Dependency directories (Folder modul Node.js)
+node_modules/
+jspm_packages/
+
+# Environment variables (File rahasia/konfigurasi)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs (File log error)
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Directory for instrument coverage scripts
+coverage/
+*.lcov
+
+# IDEs and editors (File konfigurasi code editor Anda)
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Operating System files (File bawaan OS)
+.DS_Store
+Thumbs.db
