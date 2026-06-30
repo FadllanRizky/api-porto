@@ -18,6 +18,10 @@ export const productService = {
   async create(body, user) {
     const { name, price, category_id, description, brand, image_url, stok } = body;
 
+    if (Number(price) <= 0) {
+      throw new Error('Harga produk harus lebih dari 0, bos!');
+    }
+
     // 🔥 cek category ada atau tidak
     const { data: category, error: categoryError } = await supabase
       .from('categories')
@@ -87,6 +91,10 @@ export const productService = {
 },
 
   async update(id, body, user) {
+    if (body.price !== undefined && Number(body.price) <= 0) {
+      throw new Error('Harga produk harus lebih dari 0, bos!');
+    }
+
     const { data, error } = await supabase
       .from('products')
       .update(body)

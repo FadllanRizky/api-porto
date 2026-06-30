@@ -143,7 +143,8 @@ export const adminService = {
         next_due_date: dueDate.toISOString(),
         updated_at: new Date().toISOString() 
       })
-      .eq('id', id);
+      .eq('id', id)
+      .select()
 
     if (updateLoanErr) {
       console.error("🚨 Detail Eror Supabase (loans):", updateLoanErr);
@@ -161,7 +162,8 @@ export const adminService = {
         approved_by: adminId,
         updated_at: new Date().toISOString()
       })
-      .eq('id', id);
+      .eq('id', id)
+      .select()
 
     if (error) {
       console.error("🚨 Supabase Error (rejectLoan):", error.message);
@@ -172,6 +174,11 @@ export const adminService = {
 
   // ==================== 📦 MANAGEMENT PRODUCTS ====================
   async createProduct(productData) {
+    const productPrice = Number(productData.price || 0);
+    if (productPrice <= 0) {
+      throw new Error('Harga produk harus lebih dari 0, bos!');
+    }
+
     const finalStok = productData.stock !== undefined ? productData.stock : productData.stok;
     
     // Validasi super ketat untuk category_id agar tidak memicu bad request UUID
@@ -184,7 +191,7 @@ export const adminService = {
       name: productData.name,
       slug: productData.slug || productData.name?.toLowerCase().replace(/ /g, '-'), // Auto slug jika kosong
       brand: productData.brand,
-      price: Number(productData.price || 0),
+      price: productPrice,
       stok: Number(finalStok || 0),
       image_url: productData.image_url,
       description: productData.description
@@ -203,6 +210,11 @@ export const adminService = {
   },
 
   async updateProduct(id, productData) {
+    const productPrice = Number(productData.price || 0);
+    if (productPrice <= 0) {
+      throw new Error('Harga produk harus lebih dari 0, bos!');
+    }
+
     const finalStok = productData.stock !== undefined ? productData.stock : productData.stok;
 
     const cleanCategoryId = productData.category_id && productData.category_id.trim() !== "" 
@@ -214,7 +226,7 @@ export const adminService = {
       name: productData.name,
       slug: productData.slug,
       brand: productData.brand,
-      price: Number(productData.price || 0),
+      price: productPrice,
       stok: Number(finalStok || 0),
       image_url: productData.image_url,
       description: productData.description,

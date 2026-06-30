@@ -14,6 +14,49 @@ export const transactionService = {
     return data.estimated_delivery;
   },
 
+  // ⏱️ Parse string estimasi seperti "2 Hari" atau "6-8 Hari" → ambil angka max
+  parseEstimationDays(estimationStr) {
+    const match = estimationStr.match(/(\d+)/g);
+    if (!match) return 7;
+    const numbers = match.map(Number);
+    return Math.max(...numbers);
+  },
+
+  // 🔄 Auto-update status transaksi yang sudah melewati estimasi tiba
+  async autoCompleteTransactions(transactions) {
+    const now = new Date();
+    const updatedIds = [];
+
+    for (const tx of transactions) {
+      if (tx.status !== 'processing' && tx.status !== 'shipping') continue;
+      if (!tx.created_at) continue;
+
+      // Gunakan estimated_arrival_date jika ada, atau hitung dari estimasi
+      let arrivalDate;
+      if (tx.estimated_arrival_date) {
+        arrivalDate = new Date(tx.estimated_arrival_date);
+      } else {
+        const days = this.parseEstimationDays(tx.estimated_delivery);
+        const createdDate = new Date(tx.created_at);
+        arrivalDate = new Date(createdDate.getTime() + days * 24 * 60 * 60 * 1000);
+      }
+
+      if (now >= arrivalDate) {
+        const { error } = await supabase
+          .from('transactions')
+          .update({ status: 'completed', updated_at: new Date().toISOString() })
+          .eq('id', tx.id);
+
+        if (!error) {
+          updatedIds.push(tx.id);
+          tx.status = 'completed';
+        }
+      }
+    }
+
+    return transactions;
+  },
+
   // 🛒 1. PROSES CHECKOUT & BELANJA (Potong Saldo + Potong Stok Toko)
   async checkout(userId, items, shippingRegion, paymentMethod, token) {
     if (!items || items.length === 0) throw new Error('Keranjang belanja lu kosong, bos!');
@@ -74,6 +117,10 @@ export const transactionService = {
     // B. HITUNG ESTIMASI HARI SAMPAI (dari database online)
     const estimation = await this.calculateShipping(shippingRegion);
 
+    // 🔥 Hitung estimasi tanggal sampai
+    const arrivalDays = this.parseEstimationDays(estimation);
+    const arrivalDate = new Date(Date.now() + arrivalDays * 24 * 60 * 60 * 1000);
+
     // 🔥 C. INSERT KE TABEL TRANSACTIONS (Bersih tanpa .headers)
     const { data: transaction, error: txError } = await supabase
       .from('transactions')
@@ -85,7 +132,8 @@ export const transactionService = {
         description: `Belanja e-commerce sebanyak ${items.length} jenis barang`,
         status: 'processing', 
         shipping_region: shippingRegion, 
-        estimated_delivery: estimation   
+        estimated_delivery: estimation,
+        estimated_arrival_date: arrivalDate.toISOString()
       }])
       .select()
       .single();
@@ -125,7 +173,11 @@ export const transactionService = {
       .order('created_at', { ascending: false });
 
     if (error) throw new Error(error.message);
-    return data;
+
+    // 🔄 Auto-update status transaksi yang sudah lewat estimasi
+    const updatedData = await this.autoCompleteTransactions(data);
+
+    return updatedData;
   },
 
   // 👑 3. ADMIN DASHBOARD (Melihat Barang yang Dibeli & Sisa 'Stok' yang Berkurang)
@@ -144,7 +196,11 @@ export const transactionService = {
       .order('created_at', { ascending: false });
 
     if (error) throw new Error(error.message);
-    return data;
+
+    // 🔄 Auto-update status agar sinkron dengan user
+    const updatedData = await this.autoCompleteTransactions(data);
+
+    return updatedData;
   },
   // ⭐️ 4. KIRIM ULASAN BINTANG & KOMEN (SISI USER)
   async createReview(userId, body, token) {

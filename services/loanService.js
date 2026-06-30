@@ -39,8 +39,8 @@ export const loanService = {
 
     // 🔥 FIX: Bersihkan nomor telepon dari karakter unik (+, -, spasi) sebelum divalidasi
     const cleanPhone = body.phone_number ? body.phone_number.toString().replace(/\D/g, '') : '';
-    if (cleanPhone.length < 10 || /^0+$/.test(cleanPhone)) {
-      throw new Error('Nomor telepon tidak valid! Tidak boleh angka 0 semua dan minimal 10 digit, bos!');
+    if (cleanPhone.length !== 12 || /^0+$/.test(cleanPhone)) {
+      throw new Error('Nomor telepon tidak valid! Harus tepat 12 digit angka, bos!');
     }
 
     // 🔥 FIX: Paksa konversi ke tipe data Number/Integer semenjak awal masuk dari form-data
