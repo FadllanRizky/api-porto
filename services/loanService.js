@@ -335,15 +335,8 @@ async payInstallment(loanId, user) {
   const baseDate = loan.next_due_date ? new Date(loan.next_due_date) : new Date(loan.created_at);
   baseDate.setMonth(baseDate.getMonth() + 1);
 
-  // 5. EKSEKUSI MUTASI DI SUPABASE (Gunakan Transaksi atau Update Berurutan)
-  // A. Potong Saldo User
-  const { error: upUserErr } = await supabase
-    .from('users')
-    .update({ balance: newBalance })
-    .eq('id', user.id);
-  if (upUserErr) throw new Error('Gagal memotong saldo user: ' + upUserErr.message);
-
-  // B. Perbarui Sisa Tagihan & Jatuh Tempo di Tabel Loans
+  // 5. EKSEKUSI MUTASI DI SUPABASE (Prioritas: catat dulu, baru potong saldo)
+  // A. Perbarui Sisa Tagihan & Jatuh Tempo di Tabel Loans (metadata, bukan uang)
   const { data: updatedLoan, error: upLoanErr } = await supabase
     .from('loans')
     .update({
@@ -357,15 +350,15 @@ async payInstallment(loanId, user) {
 
   if (upLoanErr) throw new Error('Gagal memperbarui kontrak pinjaman: ' + upLoanErr.message);
 
-  // C. Kredit saldo admin (uang masuk ke admin)
-      const { data: adminAccounts, error: adminFetchErr } = await supabase
-        .from('admins')
-        .select('id, balance')
-        .limit(1);
+  // B. Kredit saldo admin (uang masuk ke admin)
+  const { data: adminAccounts, error: adminFetchErr } = await supabase
+    .from('admins')
+    .select('id, balance')
+    .limit(1);
 
-      if (adminFetchErr || !adminAccounts || adminAccounts.length === 0) {
-        throw new Error('Gagal mengambil data admin: ' + (adminFetchErr?.message || 'Tidak ada akun admin ditemukan'));
-      }
+  if (adminFetchErr || !adminAccounts || adminAccounts.length === 0) {
+    throw new Error('Gagal mengambil data admin: ' + (adminFetchErr?.message || 'Tidak ada akun admin ditemukan'));
+  }
 
   const adminNewBalance = Number(adminAccounts[0].balance || 0) + nominalTagihan;
   const { error: upAdminErr } = await supabase
@@ -374,6 +367,13 @@ async payInstallment(loanId, user) {
     .eq('id', adminAccounts[0].id);
 
   if (upAdminErr) throw new Error('Gagal mengkredit saldo admin: ' + upAdminErr.message);
+
+  // C. Potong Saldo User (PALING AKHIR, setelah semua catatan berhasil)
+  const { error: upUserErr } = await supabase
+    .from('users')
+    .update({ balance: newBalance })
+    .eq('id', user.id);
+  if (upUserErr) throw new Error('Gagal memotong saldo user: ' + upUserErr.message);
 
   return { updatedLoan, newBalance };
 }

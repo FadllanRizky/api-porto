@@ -91,37 +91,14 @@ export const transactionService = {
 
     // Validasi kecukupan saldo user
     if (user.balance < totalAmount) {
-      throw new Error(`Saldo tidak cukup bos! Total belanjaan: Rp ${totalAmount.toLocaleString()}, Saldo lu: Rp ${user.balance.toLocaleString()}.`);
+      throw new Error(`Saldo tidak cukup bos! Total belanjaan: Rp ${totalAmount.toLocaleString()}, Saldo Anda: Rp ${user.balance.toLocaleString()}.`);
     }
 
-    // 🔥 A. POTONG SALDO USER DI TABEL USERS (Bersih tanpa .headers)
-    const newBalance = user.balance - totalAmount;
-    const { error: updateBalError } = await supabase
-      .from('users')
-      .update({ balance: newBalance })
-      .eq('id', userId);
-
-    if (updateBalError) throw new Error('Gagal memotong saldo user: ' + updateBalError.message);
-
-    // KREDIT SALDO ADMIN
-    const { data: adminAccounts } = await supabase
-      .from('admins')
-      .select('id, balance')
-      .limit(1);
-
-    if (adminAccounts && adminAccounts.length > 0) {
-      const adminNewBal = Number(adminAccounts[0].balance || 0) + totalAmount;
-      await supabase.from('admins').update({ balance: adminNewBal }).eq('id', adminAccounts[0].id);
-    }
-
-    // B. HITUNG ESTIMASI HARI SAMPAI (dari database online)
+    // 🔥 A. BUAT TRANSAKSI TERLEBIH DAHULU (sebelum potong saldo)
     const estimation = await this.calculateShipping(shippingRegion);
-
-    // 🔥 Hitung estimasi tanggal sampai
     const arrivalDays = this.parseEstimationDays(estimation);
     const arrivalDate = new Date(Date.now() + arrivalDays * 24 * 60 * 60 * 1000);
 
-    // 🔥 C. INSERT KE TABEL TRANSACTIONS (Bersih tanpa .headers)
     const { data: transaction, error: txError } = await supabase
       .from('transactions')
       .insert([{ 
@@ -140,19 +117,42 @@ export const transactionService = {
 
     if (txError) throw new Error('Gagal membuat transaksi: ' + txError.message);
 
-    // D. INSERT KE DETAIL ITEM & POTONG ANGKA 'STOK' PRODUK SATU PER SATU
+    // 🔥 B. INSERT ITEM & UPDATE STOK (dengan error handling)
     for (const item of validatedItems) {
-      // 🔥 Insert Item (Bersih tanpa .headers)
-      await supabase
+      const { error: itemError } = await supabase
         .from('transaction_items')
         .insert([{ transaction_id: transaction.id, product_id: item.product_id, quantity: item.quantity, price: item.price }]);
-      
-      // 🔥 Update nilai stok yang berkurang (Bersih tanpa .headers)
+
+      if (itemError) throw new Error('Gagal menyimpan item transaksi: ' + itemError.message);
+
       const updatedStok = item.currentStok - item.quantity;
-      await supabase
+      const { error: stokError } = await supabase
         .from('products')
         .update({ stok: updatedStok }) 
         .eq('id', item.product_id);
+
+      if (stokError) throw new Error('Gagal memperbarui stok produk: ' + stokError.message);
+    }
+
+    // 🔥 C. POTONG SALDO USER (PALING AKHIR, setelah transaksi berhasil dibuat)
+    const newBalance = user.balance - totalAmount;
+    const { error: updateBalError } = await supabase
+      .from('users')
+      .update({ balance: newBalance })
+      .eq('id', userId);
+
+    if (updateBalError) throw new Error('Gagal memotong saldo user: ' + updateBalError.message);
+
+    // KREDIT SALDO ADMIN
+    const { data: adminAccounts } = await supabase
+      .from('admins')
+      .select('id, balance')
+      .limit(1);
+
+    if (adminAccounts && adminAccounts.length > 0) {
+      const adminNewBal = Number(adminAccounts[0].balance || 0) + totalAmount;
+      const { error: adminError } = await supabase.from('admins').update({ balance: adminNewBal }).eq('id', adminAccounts[0].id);
+      if (adminError) console.error('Gagal mengkredit saldo admin:', adminError.message);
     }
 
     return { message: 'Belanja berhasil, boskuh!', transaction_id: transaction.id, estimation };

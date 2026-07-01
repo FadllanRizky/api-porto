@@ -112,28 +112,12 @@ export const adminService = {
     const saldoUserBaru = Number(user.balance || 0) + nominalPinjaman;
 
     // 4. JALANKAN UPDATE KE MASING-MASING TABEL
-    // Update saldo Admin
-    const { error: updateAdminErr } = await supabase
-      .from('admins')
-      .update({ balance: saldoAdminBaru })
-      .eq('id', adminId);
-
-    if (updateAdminErr) throw new Error('Gagal memotong dana saldo admin: ' + updateAdminErr.message);
-
-    // Update saldo User
-    const { error: updateWallErr } = await supabase
-      .from('users')
-      .update({ balance: saldoUserBaru })
-      .eq('id', loan.user_id);
-
-    if (updateWallErr) throw new Error('Gagal menyuntikkan dana saldo ke user: ' + updateWallErr.message);
-
     // Hitung sisa tagihan & tanggal jatuh tempo pertama
     const remainingAmountValue = Number(loan.monthly_payment) * parseInt(loan.tenure_month, 10);
     const dueDate = new Date();
     dueDate.setMonth(dueDate.getMonth() + 1);
 
-    // Update status berkas pinjaman (sekaligus set remaining_amount & next_due_date)
+    // A. Update status berkas pinjaman TERLEBIH DAHULU (metadata, bukan uang)
     const { error: updateLoanErr } = await supabase
       .from('loans')
       .update({ 
@@ -145,11 +129,28 @@ export const adminService = {
       })
       .eq('id', id)
       .select()
+      // .single();
 
     if (updateLoanErr) {
       console.error("🚨 Detail Eror Supabase (loans):", updateLoanErr);
       throw new Error('Gagal memperbarui status berkas di database: ' + updateLoanErr.message);
     }
+
+    // B. Update saldo Admin
+    const { error: updateAdminErr } = await supabase
+      .from('admins')
+      .update({ balance: saldoAdminBaru })
+      .eq('id', adminId);
+
+    if (updateAdminErr) throw new Error('Gagal memotong dana saldo admin: ' + updateAdminErr.message);
+
+    // C. Update saldo User (PALING AKHIR)
+    const { error: updateWallErr } = await supabase
+      .from('users')
+      .update({ balance: saldoUserBaru })
+      .eq('id', loan.user_id);
+
+    if (updateWallErr) throw new Error('Gagal menyuntikkan dana saldo ke user: ' + updateWallErr.message);
 
     return { message: 'Pinjaman disetujui, saldo admin berhasil dipotong, dana sukses dicairkan bos!' };
   },
@@ -164,6 +165,7 @@ export const adminService = {
       })
       .eq('id', id)
       .select()
+      // .single;
 
     if (error) {
       console.error("🚨 Supabase Error (rejectLoan):", error.message);
