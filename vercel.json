@@ -5,5 +5,11 @@
       "source": "/(.*)",
       "destination": "api/index.js"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/transactions/cron-auto-complete",
+      "schedule": "0 0 * * *"
+    }
   ]
 }

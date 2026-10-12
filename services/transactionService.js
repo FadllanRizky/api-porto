@@ -14,47 +14,200 @@ export const transactionService = {
     return data.estimated_delivery;
   },
 
-  // ⏱️ Parse string estimasi seperti "2 Hari" atau "6-8 Hari" → ambil angka max
+  // ⏱️ Parse string estimasi seperti "2 Hari" atau "6-8 Hari" → ambil angka max (null-safe)
   parseEstimationDays(estimationStr) {
-    const match = estimationStr.match(/(\d+)/g);
-    if (!match) return 7;
-    const numbers = match.map(Number);
-    return Math.max(...numbers);
+    try {
+      if (estimationStr === null || estimationStr === undefined) return 7;
+      if (typeof estimationStr === 'number' && Number.isFinite(estimationStr)) {
+        return Math.max(1, Math.round(estimationStr));
+      }
+      const str = String(estimationStr);
+      const match = str.match(/(\d+)/g);
+      if (!match) return 7;
+      const numbers = match.map(Number).filter((n) => Number.isFinite(n));
+      if (numbers.length === 0) return 7;
+      return Math.max(...numbers);
+    } catch {
+      return 7;
+    }
   },
 
-  // 🔄 Auto-update status transaksi yang sudah melewati estimasi tiba
+  // 🏷️ Normalisasi status legacy/beda bahasa ke kanonik backend:
+  // 'processing' | 'shipping' | 'completed' (DB tetap 'completed', UI mapping ke SUCCESS/SELESAI)
+  normalizeStatus(raw) {
+    const s = String(raw || '').trim().toLowerCase();
+    if (['completed', 'complete', 'success', 'sukses', 'selesai', 'done'].includes(s)) return 'completed';
+    if (['shipping', 'shipped', 'kirim', 'dikirim', 'jalan', 'dalam perjalanan', 'delivery', 'on_delivery'].includes(s)) return 'shipping';
+    if (['processing', 'process', 'proses', 'pending', 'paid', 'dibayar', 'diproses'].includes(s)) return 'processing';
+    return s || 'processing';
+  },
+
+  // 📅 Hitung tanggal tiba: pakai estimated_arrival_date jika valid, else created_at + estimasi hari
+  resolveArrivalDate(tx, fallbackDays) {
+    try {
+      if (tx.estimated_arrival_date) {
+        const d = new Date(tx.estimated_arrival_date);
+        if (!Number.isNaN(d.getTime())) return d;
+      }
+      if (!tx.created_at) return null;
+      const created = new Date(tx.created_at);
+      if (Number.isNaN(created.getTime())) return null;
+      const days = Number.isFinite(fallbackDays) ? fallbackDays : this.parseEstimationDays(tx.estimated_delivery);
+      return new Date(created.getTime() + days * 24 * 60 * 60 * 1000);
+    } catch {
+      return null;
+    }
+  },
+
+  // 🚚 Hitung ambang "kirim": dibuat + max(1 hari, setengah estimasi). Cth 10 hari → hari ke-5 jadi shipping.
+  resolveShippingDate(tx, arrivalDays) {
+    try {
+      if (!tx.created_at) return null;
+      const created = new Date(tx.created_at);
+      if (Number.isNaN(created.getTime())) return null;
+      const half = Math.max(1, Math.floor((arrivalDays || 7) / 2));
+      return new Date(created.getTime() + half * 24 * 60 * 60 * 1000);
+    } catch {
+      return null;
+    }
+  },
+
+  // 🔄 Auto-update 2 tahap sesuai estimasi daerah:
+  // processing -> shipping (lewat setengah estimasi) -> completed (lewat estimated_arrival_date)
+  // Aman untuk data legacy ('proses'/'pending') & estimated_delivery null.
   async autoCompleteTransactions(transactions) {
     const now = new Date();
-    const updatedIds = [];
+    if (!Array.isArray(transactions)) return transactions;
 
     for (const tx of transactions) {
-      if (tx.status !== 'processing' && tx.status !== 'shipping') continue;
-      if (!tx.created_at) continue;
+      try {
+        if (!tx || !tx.id) continue;
+        const raw = String(tx.status || '');
+        const effective = this.normalizeStatus(raw);
 
-      // Gunakan estimated_arrival_date jika ada, atau hitung dari estimasi
-      let arrivalDate;
-      if (tx.estimated_arrival_date) {
-        arrivalDate = new Date(tx.estimated_arrival_date);
-      } else {
-        const days = this.parseEstimationDays(tx.estimated_delivery);
-        const createdDate = new Date(tx.created_at);
-        arrivalDate = new Date(createdDate.getTime() + days * 24 * 60 * 60 * 1000);
-      }
-
-      if (now >= arrivalDate) {
-        const { error } = await supabase
-          .from('transactions')
-          .update({ status: 'completed', updated_at: new Date().toISOString() })
-          .eq('id', tx.id);
-
-        if (!error) {
-          updatedIds.push(tx.id);
+        // Sudah sukses → samakan tampilan ke 'completed' (mapping ke SUCCESS di UI)
+        if (effective === 'completed') {
           tx.status = 'completed';
+          continue;
         }
+        if (effective !== 'processing' && effective !== 'shipping') continue;
+        if (!tx.created_at) continue;
+
+        const arrivalDays = this.parseEstimationDays(tx.estimated_delivery);
+        const arrivalDate = this.resolveArrivalDate(tx, arrivalDays);
+        if (!arrivalDate) continue;
+
+        // Tahap 2: waktu tiba terlewati → completed (SUCCESS di UI)
+        if (now >= arrivalDate) {
+          const { error } = await supabase
+            .from('transactions')
+            .update({ status: 'completed', updated_at: new Date().toISOString() })
+            .eq('id', tx.id);
+          if (!error) tx.status = 'completed';
+          continue;
+        }
+
+        // Tahap 1: lewat setengah estimasi → shipping (DALAM PERJALANAN di UI)
+        if (effective === 'processing') {
+          const shippingAt = this.resolveShippingDate(tx, arrivalDays);
+          if (shippingAt && now >= shippingAt) {
+            const { error } = await supabase
+              .from('transactions')
+              .update({ status: 'shipping', updated_at: new Date().toISOString() })
+              .eq('id', tx.id);
+            if (!error) tx.status = 'shipping';
+          } else {
+            // Normalisasi fosil legacy ('proses'/'pending') ke 'processing' biar tidak stuck permanen
+            if (raw.toLowerCase() !== 'processing') {
+              const { error } = await supabase
+                .from('transactions')
+                .update({ status: 'processing', updated_at: new Date().toISOString() })
+                .eq('id', tx.id);
+              if (!error) tx.status = 'processing';
+              else tx.status = 'processing';
+            }
+          }
+        } else {
+          tx.status = 'shipping';
+        }
+      } catch {
+        continue;
       }
     }
 
     return transactions;
+  },
+
+  // ✅ Update status manual dengan validasi transisi + kepemilikan
+  async updateTransactionStatus({ transactionId, requesterId, requesterRole, targetStatus }) {
+    const target = this.normalizeStatus(targetStatus);
+    if (!['shipping', 'completed'].includes(target)) {
+      throw new Error('Status tujuan tidak valid. Gunakan: shipping / completed.');
+    }
+    if (!transactionId) throw new Error('ID transaksi wajib diisi.');
+
+    const { data: tx, error: fetchError } = await supabase
+      .from('transactions')
+      .select('id, user_id, status')
+      .eq('id', transactionId)
+      .single();
+
+    if (fetchError || !tx) throw new Error('Transaksi tidak ditemukan.');
+    const current = this.normalizeStatus(tx.status);
+    if (current === 'completed') throw new Error('Transaksi sudah selesai (SUCCESS).');
+
+    const isAdmin = requesterRole === 'admin';
+    const isOwner = String(tx.user_id) === String(requesterId);
+    if (!isAdmin && !isOwner) throw new Error('Kamu tidak berhak mengubah transaksi ini.');
+
+    // Aturan transisi:
+    // processing -> shipping : admin only (tombol Kirim)
+    // processing -> completed : owner / admin (tombol Pesanan Diterima / Selesaikan)
+    // shipping -> completed   : owner / admin
+    if (current === 'processing' && target === 'shipping' && !isAdmin) {
+      throw new Error('Hanya admin yang bisa mengubah ke status pengiriman.');
+    }
+    if (current === 'shipping' && target === 'shipping') {
+      throw new Error('Transaksi sudah dalam pengiriman.');
+    }
+    if (current === 'processing' && !['shipping', 'completed'].includes(target)) {
+      throw new Error('Transisi status tidak diizinkan.');
+    }
+    if (current === 'shipping' && target !== 'completed') {
+      throw new Error('Transisi status tidak diizinkan.');
+    }
+
+    const { data: updated, error: updateError } = await supabase
+      .from('transactions')
+      .update({ status: target, updated_at: new Date().toISOString() })
+      .eq('id', transactionId)
+      .select()
+      .single();
+
+    if (updateError) throw new Error('Gagal memperbarui status: ' + updateError.message);
+    return updated;
+  },
+
+  // 🕛 Batch untuk cron: sapu semua processing/shipping (+legacy) yang kedaluwarsa tanpa perlu token user
+  async autoCompleteExpiredBatch(limit = 500) {
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('id, status, created_at, estimated_delivery, estimated_arrival_date')
+      .in('status', ['processing', 'shipping', 'proses', 'pending', 'PROSES', 'PROCESSING', 'SHIPPING'])
+      .order('created_at', { ascending: true })
+      .limit(limit);
+
+    if (error) throw new Error(error.message);
+    const before = (data || []).map((t) => ({ id: t.id, status: this.normalizeStatus(t.status) }));
+    const updated = await this.autoCompleteTransactions(data || []);
+    let shipped = 0;
+    let completed = 0;
+    updated.forEach((tx, i) => {
+      const prev = before[i]?.status;
+      if (tx.status === 'shipping' && prev === 'processing') shipped += 1;
+      if (tx.status === 'completed' && prev !== 'completed') completed += 1;
+    });
+    return { checked: updated.length, shipped, completed };
   },
 
   // 🛒 1. PROSES CHECKOUT & BELANJA (Potong Saldo + Potong Stok Toko)

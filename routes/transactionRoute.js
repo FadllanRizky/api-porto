@@ -16,6 +16,14 @@ router.get('/history', authMiddleware, transactionController.getHistory);
 // 3. Jalur untuk memberikan Rating Bintang & Komen setelah barang sampai
 router.post('/review', authMiddleware, transactionController.reviewProduct);
 
+// 3b. Cron otomatis (Vercel Cron) — WAJIB di atas route :id agar tidak ketelan param
+router.get('/cron-auto-complete', transactionController.runAutoComplete);
+
+// 3c. Update status manual:
+// - PATCH /transactions/:id/status { status: 'completed' } → user (Pesanan Diterima) / admin (Selesaikan)
+// - PATCH /transactions/:id/status { status: 'shipping' } → admin only (Kirim)
+router.patch('/:id/status', authMiddleware, transactionController.updateStatus);
+
 
 // 👑 =============== JALUR AKSES KHUSUS ADMIN ===============
 
